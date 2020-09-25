@@ -446,5 +446,11 @@ sys_pipe(void)
 int
 sys_lseek(void) 
 {
-  return filelseek(0);
+  struct file *f;
+  int o, w;
+
+  if(argfd(0, 0, &f) < 0 || argint(1, &o) < 0 || argint(2, &w) < 0)
+    return -1;
+
+  return filelseek(f, o, w);
 }
