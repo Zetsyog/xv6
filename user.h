@@ -23,7 +23,7 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
-int lseek(int, int, int);
+int lseek(int, uint, int);
 
 // ulib.c
 int stat(const char*, struct stat*);

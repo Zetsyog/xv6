@@ -447,9 +447,10 @@ int
 sys_lseek(void) 
 {
   struct file *f;
-  int o, w;
+  int w;
+  uint o;
 
-  if(argfd(0, 0, &f) < 0 || argint(1, &o) < 0 || argint(2, &w) < 0)
+  if(argfd(0, 0, &f) < 0 || argint(1, (int *)&o) < 0 || argint(2, &w) < 0)
     return -1;
 
   return filelseek(f, o, w);

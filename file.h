@@ -28,10 +28,11 @@ struct inode {
 // table mapping major device number to
 // device functions
 struct devsw {
-  int (*read)(struct inode*, char*, int);
-  int (*write)(struct inode*, char*, int);
+  int (*read)(struct inode*, char*, int, uint);
+  int (*write)(struct inode*, char*, int, uint);
 };
 
 extern struct devsw devsw[];
 
+#define P_DEV 0
 #define CONSOLE 1
