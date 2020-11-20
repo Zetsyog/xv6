@@ -6,6 +6,7 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+#include "prio.h"
 
 struct {
   struct spinlock lock;
@@ -65,6 +66,45 @@ myproc(void) {
   return p;
 }
 
+void decconso() {
+  struct proc *p;
+  acquire(&ptable.lock);
+
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+    p->conso /= 2;
+
+  release(&ptable.lock);
+}
+
+// ptable.lock must be acquired before
+struct proc *selproc(int prio) {
+  struct proc *p = 0;
+  struct proc *ret = 0;
+
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state != RUNNABLE || p->prio != prio)
+      continue;
+    
+    if(ret == 0) {
+      ret = p;
+      continue;
+    }
+
+    // Si on est en PRIO_CPU
+    // On privilégie les process qui ont le moins consommé
+    if(prio == PRIO_CPU && p->conso < ret->conso) {
+      ret = p;
+    }
+
+    // De manère générale, on prévilégie le process le plus vieux
+    if(p->last < ret->last) {
+      ret = p;
+    }
+  }
+  
+  return ret;
+}
+
 //PAGEBREAK: 32
 // Look in the process table for an UNUSED proc.
 // If found, change state to EMBRYO and initialize
@@ -111,6 +151,8 @@ found:
   p->context = (struct context*)sp;
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
+  p->prio = PRIO_RR;
+  p->last = ticks;
 
   return p;
 }
@@ -197,6 +239,8 @@ fork(void)
     return -1;
   }
   np->sz = curproc->sz;
+  np->prio = curproc->prio;
+  np->last = 0;
   np->parent = curproc;
   *np->tf = *curproc->tf;
 
@@ -311,6 +355,27 @@ wait(void)
   }
 }
 
+// Switch to chosen process.  It is the process's job
+// to release ptable.lock and then reacquire it
+// before jumping back to us.
+void swtchproc(struct proc *p) {
+  struct cpu *c = mycpu();
+
+  // on met à jour la date de dernière exec 
+  p->last = ticks;
+  
+  c->proc = p;
+  switchuvm(p);
+  p->state = RUNNING;
+
+  swtch(&(c->scheduler), p->context);
+  switchkvm();
+
+  // Process is done running for now.
+  // It should have changed its p->state before coming back.
+  c->proc = 0;
+}
+
 //PAGEBREAK: 42
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
@@ -322,7 +387,7 @@ wait(void)
 void
 scheduler(void)
 {
-  struct proc *p;
+  struct proc *p = 0;
   struct cpu *c = mycpu();
   c->proc = 0;
   
@@ -332,26 +397,17 @@ scheduler(void)
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-        continue;
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
+    p = selproc(PRIO_RT);
+    if(!p) p = selproc(PRIO_CPU);
+    if(!p) p = selproc(PRIO_RR);
+    if(!p) p = selproc(PRIO_LOW);
 
-      swtch(&(c->scheduler), p->context);
-      switchkvm();
-
-      // Process is done running for now.
-      // It should have changed its p->state before coming back.
-      c->proc = 0;
+    if(p) {
+      swtchproc(p);
     }
+    
     release(&ptable.lock);
-
   }
 }
 
@@ -459,9 +515,15 @@ wakeup1(void *chan)
 {
   struct proc *p;
 
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == SLEEPING && p->chan == chan)
-      p->state = RUNNABLE;
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if(p->state == SLEEPING && p->chan == chan) {
+      if(p->prio == PRIO_RT) {
+        swtchproc(p);
+      } else {
+        p->state = RUNNABLE;
+      }
+    }
+  }
 }
 
 // Wake up all processes sleeping on chan.
@@ -523,7 +585,7 @@ procdump(void)
       state = states[p->state];
     else
       state = "???";
-    cprintf("%d %s %s", p->pid, state, p->name);
+    cprintf("%d %s %s %d %d", p->pid, state, p->name, p->prio, p->conso);
     if(p->state == SLEEPING){
       getcallerpcs((uint*)p->context->ebp+2, pc);
       for(i=0; i<10 && pc[i] != 0; i++)
@@ -531,4 +593,22 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+int setprio(int prio, int pid) {
+  struct proc *p;
+  if(pid == 0) {
+    p = myproc();
+  }
+
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->pid == pid){
+      p->prio = prio;
+      release(&ptable.lock);
+      return 0;
+    }
+  }
+  release(&ptable.lock);
+  return -1;
 }
